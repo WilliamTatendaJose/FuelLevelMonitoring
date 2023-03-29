@@ -1,0 +1,266 @@
+
+#include <Wire.h>
+#include <math.h>
+#include <RTClib.h>    // DS1302 library
+#include <SoftwareSerial.h>
+#include <LiquidCrystal_I2C.h>
+#include <TimeLib.h>
+#include <TimeAlarms.h>
+#include  <time.h>
+
+
+
+// Init rtc object
+//   DS1302 rtc;
+//   DS1302 rtc(ce_pin, sck_pin, io_pin);
+//
+// ce_pin  (RST): default 4
+// sck_pin (CLK): default 5
+// io_pin  (DAT): default 6
+
+
+DS1302 rtc(8, 6, 7);
+
+#define PINNUMBER ""
+#define phoneNumber ""
+
+#define alarmPin 2
+#define pushButton_pin 33
+
+// UltraSonic Sensor setup
+#define SOUND_SPEED 0.034 // cm/us
+#define trig 5
+#define echo 18
+long duration;
+float distanceCm;
+
+// initialize the library instance
+//GSM gsmAccess;
+//GSM_SMS sms;
+
+
+SoftwareSerial SIM800L(26, 27); // RX, TX
+
+
+// set the LCD number of columns and rows
+int lcdColumns = 16;
+int lcdRows = 2;
+int lcdAddress = 0x27; // to run get address sketch first
+
+// set LCD address, number of columns and rows
+// if you don't know your display address, run an I2C scanner sketch
+LiquidCrystal_I2C lcd(lcdAddress, lcdColumns, lcdRows);
+
+const double pi = 3.14159265;
+const double length = 3.0;
+const double radius = 0.5;
+double height;
+double volume;
+
+void setupRtcModule();
+void setupTimeHelpers();
+void setupGSM();
+void triggerAlarm();
+double calculateVolume(double hgt);
+void sendMessage(double msg);
+double getHeight();
+void displayVolume(double msg);
+void IRAM_ATTR measureVolume();
+
+void setup()
+{
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+
+  // setup ultrasonic sensor
+  pinMode(trig, OUTPUT);
+  pinMode(echo, INPUT);
+
+  // setup interrupts to measure volume when you press a push button
+  pinMode(pushButton_pin, INPUT_PULLUP);
+  attachInterrupt(pushButton_pin, measureVolume, RISING);
+  
+  setupGSM();
+  setupRtcModule();
+  setupTimeHelpers();
+  // initialize LCD
+  lcd.init();
+  // turn on LCD backlight
+  lcd.backlight();
+
+  while (!Serial)
+    ; // wait for Arduino Serial Monitor
+  delay(200);
+
+ 
+  // create the alarms, to trigger at specific times
+  Alarm.alarmRepeat(8, 0, 0, triggerAlarm);  // 8:00am every day
+  Alarm.alarmRepeat(15, 0, 0, triggerAlarm); // 3:00pm every day
+
+  
+}
+
+void loop()
+{
+
+  displayVolume(volume);
+  delay(5000);
+}
+
+void setupRtcModule()
+{
+  rtc.begin();
+
+  if (!rtc.isrunning())
+  {
+    Serial.println("RTC is NOT running!");
+    
+  }else{ 
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(__DATE__, __TIME__));
+    
+  }
+  
+}
+
+//set the system time for timelib
+void setupTimeHelpers()
+{
+  DateTime now = rtc.now();
+  setTime(now.second(), now.minute(), now.hour(), now.day(), now.month(), now.year());
+
+}
+
+// setting up the gms module
+void setupGSM()
+{
+
+  SIM800L.begin(9600);
+  delay(1000);
+  Serial.println("Setup Complete!");
+}
+
+// function that is called when the alarm is triggered
+void triggerAlarm()
+{
+
+  height = getHeight();
+  displayVolume(calculateVolume(height)); // Display the volume on LCD screen
+  sendMessage(calculateVolume(height));   // send the message using the gsm module
+}
+
+// function to get the liquid level using an ultrasonic sensor
+double getHeight()
+{
+
+  // Clears the trigPin
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+  // Sets the trigPin on HIGH state for 10 micro seconds
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+
+  // Reads the echo, returns the sound wave travel time in microseconds
+  duration = pulseIn(echo, HIGH);
+
+  // Calculate the distance
+  distanceCm = duration * SOUND_SPEED / 2;
+  height = distanceCm / 100; // height in meters
+  return height;
+}
+
+// https://mathworld.wolfram.com/HorizontalCylindricalSegment.html
+// Function to calculate volume of a cylinder laying parallel to the horizontal
+double calculateVolume(double hgt)
+{
+  double radius_height = radius - height;
+  double radian_angle = acos((radius_height) / radius); //*radian;
+  double sqr_root = sqrt((2 * radius * height - pow(height, 2)));
+
+  double volume = length * (pow(radius, 2) * radian_angle - radius_height * sqr_root);
+
+  return volume;
+}
+
+// function to send message via SMS
+void sendMessage(double message)
+{
+
+  SIM800L.println("AT+CMGF=1"); // Set SMS mode to text
+  delay(1000);
+  SIM800L.println("AT+CMGS=\"+1234567890\""); // Replace with your phone number
+  delay(1000);
+  SIM800L.print("Volume of Fuel left in the tank is"); // Replace with your message
+  SIM800L.println(message+0x30); // value in ASCII
+  delay(1000);
+  SIM800L.write(26); // Send CTRL+Z character
+  delay(1000);
+}
+
+
+
+// Function to display a message using the LCD
+void displayVolume(double vol)
+{
+  lcd.setCursor(0, 0);
+  lcd.print("Liters left");
+  lcd.setCursor(1,0);
+  lcd.print(vol);
+}
+
+// ISR to handle when one presses a push button to measure volume
+void IRAM_ATTR measureVolume()
+{
+  displayVolume(calculateVolume(height));
+}
+
+/*get lcd address
+
+
+
+
+#include <Wire.h>
+
+void setup() {
+  Wire.begin();
+  Serial.begin(115200);
+  Serial.println("\nI2C Scanner");
+}
+
+void loop() {
+  byte error, address;
+  int nDevices;
+  Serial.println("Scanning...");
+  nDevices = 0;
+  for(address = 1; address < 127; address++ ) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.print("I2C device found at address 0x");
+      if (address<16) {
+        Serial.print("0");
+      }
+      Serial.println(address,HEX);
+      nDevices++;
+    }
+    else if (error==4) {
+      Serial.print("Unknow error at address 0x");
+      if (address<16) {
+        Serial.print("0");
+      }
+      Serial.println(address,HEX);
+    }
+  }
+  if (nDevices == 0) {
+    Serial.println("No I2C devices found\n");
+  }
+  else {
+    Serial.println("done\n");
+  }
+  delay(5000);
+}
+
+
+
+*/
